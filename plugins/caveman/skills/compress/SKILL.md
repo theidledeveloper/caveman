@@ -29,7 +29,7 @@ Accepted target forms:
 
 2. Run:
 
-cd caveman-compress && python3 -m scripts <absolute_filepath_or_pattern> [more_targets ...]
+cd <directory_containing_this_SKILL.md> && python3 -m scripts <absolute_filepath_or_pattern> [more_targets ...]
 
 3. The CLI will:
 - resolve single files, multi-file lists, comma-separated targets, and glob patterns

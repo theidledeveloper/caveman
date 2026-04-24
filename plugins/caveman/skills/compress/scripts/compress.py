@@ -1,9 +1,48 @@
 #!/usr/bin/env python3
 """Core compression flow for caveman-compress."""
 
+import re
 from pathlib import Path
 from typing import List
 
+# Filenames and paths that almost certainly hold secrets or PII. Compressing
+# them ships raw bytes to the Anthropic API — a third-party data boundary that
+# developers on sensitive codebases cannot cross. detect.py already skips .env
+# by extension, but credentials.md / secrets.txt / ~/.aws/credentials would
+# slip through the natural-language filter. This is a hard refuse before read.
+SENSITIVE_BASENAME_REGEX = re.compile(
+    r"(?ix)^("
+    r"\.env(\..+)?"
+    r"|\.netrc"
+    r"|credentials(\..+)?"
+    r"|secrets?(\..+)?"
+    r"|passwords?(\..+)?"
+    r"|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?"
+    r"|authorized_keys"
+    r"|known_hosts"
+    r"|.*\.(pem|key|p12|pfx|crt|cer|jks|keystore|asc|gpg)"
+    r")$"
+)
+
+SENSITIVE_PATH_COMPONENTS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker"})
+
+SENSITIVE_NAME_TOKENS = (
+    "secret", "credential", "password", "passwd",
+    "apikey", "accesskey", "token", "privatekey",
+)
+
+
+def is_sensitive_path(filepath: Path) -> bool:
+    """Heuristic denylist for files that must never be shipped to a third-party API."""
+    name = filepath.name
+    if SENSITIVE_BASENAME_REGEX.match(name):
+        return True
+    lowered_parts = {p.lower() for p in filepath.parts}
+    if lowered_parts & SENSITIVE_PATH_COMPONENTS:
+        return True
+    # Normalize separators so "api-key" and "api_key" both match "apikey".
+    lower = re.sub(r"[_\-\s.]", "", name.lower())
+    return any(tok in lower for tok in SENSITIVE_NAME_TOKENS)
 from .detect import should_compress
 from .providers import resolve_backend
 from .validate import validate
@@ -70,6 +109,18 @@ def compress_file(filepath: Path) -> bool:
         raise FileNotFoundError(f"File not found: {filepath}")
     if filepath.stat().st_size > MAX_FILE_SIZE:
         raise ValueError(f"File too large to compress safely (max 500KB): {filepath}")
+
+    # Refuse files that look like they contain secrets or PII. Compressing ships
+    # the raw bytes to the Anthropic API — a third-party boundary — so we fail
+    # loudly rather than silently exfiltrate credentials or keys. Override is
+    # intentional: the user must rename the file if the heuristic is wrong.
+    if is_sensitive_path(filepath):
+        raise ValueError(
+            f"Refusing to compress {filepath}: filename looks sensitive "
+            "(credentials, keys, secrets, or known private paths). "
+            "Compression sends file contents to the Anthropic API. "
+            "Rename the file if this is a false positive."
+        )
 
     print(f"Processing: {filepath}")
 

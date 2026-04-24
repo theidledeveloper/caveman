@@ -1,65 +1,14 @@
 #!/usr/bin/env python3
-"""
-Caveman Memory Compression Orchestrator
+"""Core compression flow for caveman-compress."""
 
-Usage:
-    python scripts/compress.py <filepath>
-"""
-
-import os
-import re
-import subprocess
 from pathlib import Path
 from typing import List
 
-OUTER_FENCE_REGEX = re.compile(
-    r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
-)
-
-
-def strip_llm_wrapper(text: str) -> str:
-    """Strip outer ```markdown ... ``` fence when it wraps the entire output."""
-    m = OUTER_FENCE_REGEX.match(text)
-    if m:
-        return m.group(2)
-    return text
-
 from .detect import should_compress
+from .providers import resolve_backend
 from .validate import validate
 
 MAX_RETRIES = 2
-
-
-# ---------- Claude Calls ----------
-
-
-def call_claude(prompt: str) -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
-        try:
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=api_key)
-            msg = client.messages.create(
-                model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return strip_llm_wrapper(msg.content[0].text.strip())
-        except ImportError:
-            pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth)
-    try:
-        result = subprocess.run(
-            ["claude", "--print"],
-            input=prompt,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        return strip_llm_wrapper(result.stdout.strip())
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Claude call failed:\n{e.stderr}")
 
 
 def build_compress_prompt(original: str) -> str:
@@ -138,9 +87,11 @@ def compress_file(filepath: Path) -> bool:
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
         return False
 
+    backend = resolve_backend()
+
     # Step 1: Compress
-    print("Compressing with Claude...")
-    compressed = call_claude(build_compress_prompt(original_text))
+    print(f"Compressing with {backend.label}...")
+    compressed = backend.call(build_compress_prompt(original_text))
 
     # Save original as backup, write compressed to original path
     backup_path.write_text(original_text)
@@ -167,10 +118,8 @@ def compress_file(filepath: Path) -> bool:
             print("❌ Failed after retries — original restored")
             return False
 
-        print("Fixing with Claude...")
-        compressed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
-        )
+        print(f"Fixing with {backend.label}...")
+        compressed = backend.call(build_fix_prompt(original_text, compressed, result.errors))
         filepath.write_text(compressed)
 
     return True

@@ -322,12 +322,14 @@ Level stick until you change it or session end.
 
 ### caveman-compress
 
-Caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
+Caveman make agent *speak* with fewer tokens. **Compress** make agent *read* fewer tokens.
 
-Your `CLAUDE.md` loads on **every session start**. Caveman Compress rewrites memory files into caveman-speak so Claude reads less — without you losing the human-readable original.
+Your memory files load on session start. Caveman Compress rewrites them into caveman-speak so Claude, GPT/Codex, Gemini, Copilot, and friends read less — without you losing human-readable original.
 
 ```
 /caveman:compress CLAUDE.md
+/caveman:compress CLAUDE.md,GEMINI.md
+/caveman:compress docs/**/*.md
 ```
 
 ```
@@ -345,6 +347,8 @@ CLAUDE.original.md ← human-readable backup (you read and edit this)
 | **Average** | **898** | **481** | **46%** |
 
 Code blocks, URLs, file paths, commands, headings, dates, version numbers — anything technical passes through untouched. Only prose gets compressed. See the full [caveman-compress README](caveman-compress/README.md) for details. [Security note](./caveman-compress/SECURITY.md): Snyk flags this as High Risk due to subprocess/file patterns — it's a false positive.
+
+One file, many files, list syntax, or glob pattern all work. Anthropic/Claude and OpenAI/GPT backends both supported.
 
 ## Benchmarks
 

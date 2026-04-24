@@ -10,7 +10,7 @@
 
 ---
 
-A Claude Code skill that compresses your project memory files (`CLAUDE.md`, todos, preferences) into caveman format — so every session loads fewer tokens automatically.
+A caveman skill that compresses your project memory files (`CLAUDE.md`, todos, preferences) into caveman format — so every session loads fewer tokens automatically.
 
 Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman make file small. Cost go down forever.
 
@@ -18,6 +18,8 @@ Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman m
 
 ```
 /caveman:compress CLAUDE.md
+/caveman:compress CLAUDE.md,GEMINI.md
+/caveman:compress docs/**/*.md
 ```
 
 ```
@@ -25,7 +27,7 @@ CLAUDE.md          ← compressed (Claude reads this — fewer tokens every sess
 CLAUDE.original.md ← human-readable backup (you edit this)
 ```
 
-Original never lost. You can read and edit `.original.md`. Run skill again to re-compress after edits.
+Original never lost. You can read and edit `.original.md`. Run skill again to re-compress after edits. One file, many files, or whole glob in one shot.
 
 ## Benchmarks
 
@@ -84,15 +86,29 @@ caveman-compress/
 ## Usage
 
 ```
-/caveman:compress <filepath>
+/caveman:compress <file|files|pattern>
 ```
 
 Examples:
 ```
 /caveman:compress CLAUDE.md
+/caveman:compress CLAUDE.md,GEMINI.md
+/caveman:compress ["CLAUDE.md", "GEMINI.md", "docs/preferences.md"]
+/caveman:compress docs/**/*.md
 /caveman:compress docs/preferences.md
 /caveman:compress todos.md
 ```
+
+### Model backend
+
+Compress now works across Claude/Anthropic and GPT/OpenAI backends.
+
+- **Auto mode**: prefer Anthropic/Claude when available, else OpenAI/GPT
+- **Force provider**: `CAVEMAN_PROVIDER=anthropic|openai`
+- **Force model**: `CAVEMAN_MODEL=claude-sonnet-4-5` or `CAVEMAN_MODEL=gpt-5`
+- **Provider-specific overrides**: `ANTHROPIC_MODEL`, `OPENAI_MODEL`
+
+If no API key is set but `claude` CLI is installed, caveman-compress falls back to Claude CLI.
 
 ### What files work
 
@@ -106,22 +122,24 @@ Examples:
 ## How It Work
 
 ```
-/caveman:compress CLAUDE.md
+/caveman:compress CLAUDE.md,GEMINI.md
+        ↓
+resolve targets         (single file, list, or glob)
         ↓
 detect file type        (no tokens)
         ↓
-Claude compresses       (tokens — one call)
+configured model compresses   (tokens — one call per file)
         ↓
 validate output         (no tokens)
   checks: headings, code blocks, URLs, file paths, bullets
         ↓
-if errors: Claude fixes cherry-picked issues only   (tokens — targeted fix)
+if errors: model fixes cherry-picked issues only   (tokens — targeted fix)
   does NOT recompress — only patches broken parts
         ↓
 retry up to 2 times
         ↓
-write compressed → CLAUDE.md
-write original   → CLAUDE.original.md
+write compressed → original path
+write backup     → <filename>.original.md
 ```
 
 Only two things use tokens: initial compression + targeted fix if validation fails. Everything else is local Python.

@@ -4,18 +4,24 @@ description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
   Compressed version overwrites the original file. Human-readable backup saved as FILE.original.md.
-  Trigger: /caveman:compress <filepath> or "compress memory file"
+  Trigger: /caveman:compress <file|files|pattern> or "compress memory file"
 ---
 
 # Caveman Compress
 
 ## Purpose
 
-Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`.
+Compress one or more natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`.
 
 ## Trigger
 
-`/caveman:compress <filepath>` or when user asks to compress a memory file.
+`/caveman:compress <file|files|pattern>` or when user asks to compress memory files.
+
+Accepted target forms:
+- single file: `/abs/path/to/CLAUDE.md`
+- multiple files: `/abs/path/to/CLAUDE.md /abs/path/to/GEMINI.md`
+- list syntax: `["/abs/path/to/CLAUDE.md", "/abs/path/to/GEMINI.md"]`
+- pattern match: `/abs/path/to/docs/**/*.md`
 
 ## Process
 
@@ -23,13 +29,14 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 2. Run:
 
-cd <directory_containing_this_SKILL.md> && python3 -m scripts <absolute_filepath>
+cd caveman-compress && python3 -m scripts <absolute_filepath_or_pattern> [more_targets ...]
 
 3. The CLI will:
+- resolve single files, multi-file lists, comma-separated targets, and glob patterns
 - detect file type (no tokens)
-- call Claude to compress
+- call configured model to compress (Anthropic/Claude or OpenAI/GPT; Claude CLI fallback if no API key)
 - validate output (no tokens)
-- if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
+- if errors: cherry-pick fix with same configured model (targeted fixes only, no recompression)
 - retry up to 2 times
 - if still failing after 2 retries: report error to user, leave original file untouched
 

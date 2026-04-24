@@ -64,6 +64,8 @@ def verify_synced_files() -> None:
     section("Synced Files")
     skill_source = ROOT / "skills/caveman/SKILL.md"
     rule_source = ROOT / "rules/caveman-activate.md"
+    agent_source_dir = ROOT / "agents"
+    generated_agent_dir = ROOT / ".github" / "agents"
 
     skill_copies = [
         ROOT / "caveman/SKILL.md",
@@ -87,6 +89,22 @@ def verify_synced_files() -> None:
             archive.read("caveman/SKILL.md").decode("utf-8") == skill_source.read_text(),
             "caveman.skill payload mismatch",
         )
+
+    source_agents = []
+    if agent_source_dir.exists():
+        source_agents = sorted(
+            path
+            for path in agent_source_dir.iterdir()
+            if path.is_file() and path.name != ".gitkeep" and path.suffix == ".md"
+        )
+
+    if source_agents:
+        for source in source_agents:
+            generated = generated_agent_dir / source.name
+            ensure(generated.exists(), f"Generated agent missing: {generated}")
+            ensure(generated.read_text() == source.read_text(), f"Generated agent mismatch: {generated}")
+    else:
+        ensure((generated_agent_dir / ".gitkeep").exists(), ".github/agents missing .gitkeep")
 
     print("Synced copies and caveman.skill zip OK")
 
@@ -147,14 +165,15 @@ def load_compress_modules():
     import scripts.cli as cli
     import scripts.compress  # noqa: F401
     import scripts.detect as detect
+    import scripts.targets as targets
     import scripts.validate as validate
 
-    return cli, detect, validate
+    return cli, detect, validate, targets
 
 
 def verify_compress_fixtures() -> None:
     section("Compress Fixtures")
-    _, detect, validate = load_compress_modules()
+    _, detect, validate, _ = load_compress_modules()
 
     fixtures = sorted((ROOT / "tests/caveman-compress").glob("*.original.md"))
     ensure(fixtures, "No caveman-compress fixtures found")
@@ -167,6 +186,116 @@ def verify_compress_fixtures() -> None:
         ensure(detect.should_compress(compressed), f"Fixture should be compressible: {compressed.name}")
 
     print(f"Validated {len(fixtures)} caveman-compress fixture pairs")
+
+
+def verify_compress_target_resolution() -> None:
+    section("Compress Target Resolution")
+    _, _, _, targets = load_compress_modules()
+
+    with tempfile.TemporaryDirectory(prefix="caveman-compress-targets-") as temp_root:
+        root = Path(temp_root)
+        docs_dir = root / "docs"
+        docs_dir.mkdir()
+
+        claude = root / "CLAUDE.md"
+        gemini = root / "GEMINI.md"
+        prefs = docs_dir / "preferences.md"
+
+        claude.write_text("# Claude\n")
+        gemini.write_text("# Gemini\n")
+        prefs.write_text("# Prefs\n")
+
+        resolution = targets.resolve_targets([str(claude)], cwd=root)
+        ensure(resolution.files == [claude.resolve()], "single target resolution failed")
+        ensure(not resolution.unmatched, "single target should not leave unmatched entries")
+
+        resolution = targets.resolve_targets(['["CLAUDE.md", "GEMINI.md"]'], cwd=root)
+        ensure(
+            resolution.files == [claude.resolve(), gemini.resolve()],
+            "list target resolution failed",
+        )
+        ensure(not resolution.unmatched, "list target should not leave unmatched entries")
+
+        resolution = targets.resolve_targets(["CLAUDE.md,GEMINI.md", "docs/**/*.md"], cwd=root)
+        ensure(
+            resolution.files == [claude.resolve(), gemini.resolve(), prefs.resolve()],
+            "combined list + glob target resolution failed",
+        )
+        ensure(not resolution.unmatched, "glob target should not leave unmatched entries")
+
+        resolution = targets.resolve_targets(["missing*.md"], cwd=root)
+        ensure(not resolution.files, "missing glob should not resolve files")
+        ensure(resolution.unmatched == ["missing*.md"], "missing glob should stay unmatched")
+
+    print("Compress target resolution OK")
+
+
+def verify_compress_backend_resolution() -> None:
+    section("Compress Backend Resolution")
+
+    sys.path.insert(0, str(ROOT / "caveman-compress"))
+    import scripts.providers as providers
+
+    env_keys = [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "CAVEMAN_MODEL",
+        "CAVEMAN_PROVIDER",
+    ]
+    original_env = {key: os.environ.get(key) for key in env_keys}
+    original_which = providers.shutil.which
+
+    def clear_env() -> None:
+        for key in env_keys:
+            os.environ.pop(key, None)
+
+    try:
+        clear_env()
+        os.environ["OPENAI_API_KEY"] = "test-openai"
+        os.environ["CAVEMAN_MODEL"] = "gpt-5"
+        backend = providers.resolve_backend()
+        ensure(backend.provider == "openai", "gpt model should resolve to OpenAI backend")
+
+        clear_env()
+        os.environ["ANTHROPIC_API_KEY"] = "test-anthropic"
+        backend = providers.resolve_backend()
+        ensure(backend.provider == "anthropic", "Anthropic key should resolve to Anthropic backend")
+
+        clear_env()
+        providers.shutil.which = lambda command: "/usr/local/bin/claude" if command == "claude" else None
+        backend = providers.resolve_backend()
+        ensure(backend.provider == "anthropic", "Claude CLI should resolve to Anthropic backend")
+        ensure(backend.label == "Claude CLI", "Claude CLI backend label mismatch")
+
+        clear_env()
+        os.environ["OPENAI_API_KEY"] = "test-openai"
+        os.environ["CAVEMAN_PROVIDER"] = "openai"
+        backend = providers.resolve_backend()
+        ensure(backend.provider == "openai", "explicit OpenAI provider should be honored")
+
+        clear_env()
+        os.environ["OPENAI_API_KEY"] = "test-openai"
+        os.environ["CAVEMAN_PROVIDER"] = "openai"
+        os.environ["CAVEMAN_MODEL"] = "claude-sonnet-4-5"
+        try:
+            providers.resolve_backend()
+        except RuntimeError as exc:
+            ensure("conflicts with provider" in str(exc), "provider/model conflict error mismatch")
+        else:
+            raise CheckFailure("provider/model conflict should raise RuntimeError")
+    finally:
+        providers.shutil.which = original_which
+        clear_env()
+        for key, value in original_env.items():
+            if value is not None:
+                os.environ[key] = value
+
+    print("Compress backend resolution OK")
 
 
 def verify_compress_cli() -> None:
@@ -190,7 +319,34 @@ def verify_compress_cli() -> None:
         check=False,
     )
     ensure(missing_result.returncode == 1, "compress CLI missing-file path should exit 1")
-    ensure("File not found" in missing_result.stdout, "compress CLI missing-file output mismatch")
+    ensure("No files matched" in missing_result.stdout, "compress CLI missing-file output mismatch")
+
+    pattern_result = run(
+        ["python3", "-m", "scripts", "../hooks/*.sh"],
+        cwd=ROOT / "caveman-compress",
+        check=False,
+    )
+    ensure(pattern_result.returncode == 0, "compress CLI glob path should exit 0")
+    ensure("Resolved 3 file(s)" in pattern_result.stdout, "compress CLI glob path missing resolution output")
+    ensure("Summary: success=0 skipped=3 failed=0 unmatched=0" in pattern_result.stdout, "compress CLI glob summary mismatch")
+
+    list_result = run(
+        ["python3", "-m", "scripts", '["../hooks/install.sh", "../hooks/uninstall.sh"]'],
+        cwd=ROOT / "caveman-compress",
+        check=False,
+    )
+    ensure(list_result.returncode == 0, "compress CLI list path should exit 0")
+    ensure("Resolved 2 file(s)" in list_result.stdout, "compress CLI list path missing resolution output")
+    ensure("Summary: success=0 skipped=2 failed=0 unmatched=0" in list_result.stdout, "compress CLI list summary mismatch")
+
+    partial_result = run(
+        ["python3", "-m", "scripts", "../hooks/install.sh", "../missing*.md"],
+        cwd=ROOT / "caveman-compress",
+        check=False,
+    )
+    ensure(partial_result.returncode == 2, "compress CLI partial miss path should exit 2")
+    ensure("No files matched" in partial_result.stdout, "compress CLI partial miss missing unmatched output")
+    ensure("Summary: success=0 skipped=1 failed=0 unmatched=1" in partial_result.stdout, "compress CLI partial miss summary mismatch")
 
     print("Compress CLI skip/error paths OK")
 
@@ -323,6 +479,8 @@ def main() -> int:
         verify_manifests_and_syntax,
         verify_powershell_static,
         verify_compress_fixtures,
+        verify_compress_target_resolution,
+        verify_compress_backend_resolution,
         verify_compress_cli,
         verify_hook_install_flow,
     ]
